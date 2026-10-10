@@ -1,9 +1,10 @@
 /* Real browser smoke against tests/browser_server.py, not a live GPU. */
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
+let browser, page;
 (async()=>{
- const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
- const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
+ page=await browser.newPage({viewport:{width:1440,height:1000}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:7861');
  await page.getByRole('heading',{name:'What would you like to make?'}).waitFor();
@@ -12,6 +13,7 @@ const assert = require('node:assert/strict');
  await page.getByRole('button',{name:'Generate now',exact:true}).waitFor();
  await page.getByText('Review script',{exact:true}).click();
  await page.locator('#review textarea').first().fill('Would you accept a lower price?');
+ await page.screenshot({path:(process.env.DEMO_SCREENSHOT || '/tmp/tts-demo-browser.png').replace('.png','-chat.png'),fullPage:true});
  await page.getByRole('button',{name:'Generate now',exact:true}).click();
  await page.getByText('Created “Negotiation”. Find it in Assets.',{exact:true}).waitFor();
  await page.locator('[data-tab="assets"]').click();
@@ -20,7 +22,7 @@ const assert = require('node:assert/strict');
  await page.getByRole('button',{name:'▶ Play',exact:true}).first().click();
  await page.waitForFunction(()=>document.getElementById('player').readyState>=2);
  const download = await page.locator('#assets a').first().getAttribute('href');
- const response=await page.request.get(download);
+ const response=await page.request.get(new URL(download, page.url()).href);
  assert.equal((await response.body()).subarray(0,4).toString(),'RIFF');
  await page.locator('[data-tab="chat"]').click();
  await page.locator('#message').fill('Design a voice for an older woman');
@@ -44,4 +46,4 @@ const assert = require('node:assert/strict');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
  assert.deepEqual(errors,[]);
  await browser.close();console.log('Browser smoke passed: review, generation, assembly, playback, download, voice save, reload, mobile layout.');
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(async e=>{console.error(e);if(page)await page.screenshot({path:process.env.DEMO_SCREENSHOT || '/tmp/tts-demo-browser.png',fullPage:true}).catch(()=>{});if(browser)await browser.close();process.exit(1)});

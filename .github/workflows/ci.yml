@@ -61,5 +61,5 @@ jobs:
         with:
           name: browser-smoke
           path: |
-            ${{ runner.temp }}/tts-demo-browser.png
+            ${{ runner.temp }}/tts-demo*.png
             /tmp/tts-demo-server.log
