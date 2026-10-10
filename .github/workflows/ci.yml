@@ -1,0 +1,65 @@
+name: Test and build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv build
+      - run: uv run twine check dist/*
+      - name: Verify packaged browser assets
+        run: |
+          uv run python - <<'PY'
+          import glob, zipfile
+          with zipfile.ZipFile(glob.glob('dist/*.whl')[0]) as wheel:
+              for name in ('index.html', 'app.js', 'style.css'):
+                  assert 'tts_llm_demo/static/' + name in wheel.namelist()
+          PY
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --frozen
+      - run: npm install --no-save --package-lock=false playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - name: Browser workflows with deterministic service fixtures
+        env:
+          DEMO_TEST_DIR: ${{ runner.temp }}/tts-demo-smoke
+          DEMO_SCREENSHOT: ${{ runner.temp }}/tts-demo-browser.png
+        run: |
+          uv run python tests/browser_server.py > /tmp/tts-demo-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:7861/api/state >/dev/null; then break; fi
+            sleep 1
+          done
+          node tests/browser_smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-smoke
+          path: |
+            ${{ runner.temp }}/tts-demo-browser.png
+            /tmp/tts-demo-server.log
