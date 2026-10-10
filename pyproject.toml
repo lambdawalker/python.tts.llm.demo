@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tts-llm-demo"
+version = "0.1.0"
+description = "A capability-aware browser audio agent for remote vLLM and the shared TTS API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "pydantic>=2.10,<3", "pyyaml>=6,<7", "numpy>=2,<3", "soundfile>=0.13,<1", "filelock>=3.16,<4", "tts-api-client==0.1.0"]
+
+[project.scripts]
+tts-llm-demo = "tts_llm_demo.cli:main"
+
+[tool.uv.sources]
+tts-api-client = { git = "https://github.com/lambdawalker/python.tts.api.client", rev = "f82cd3e2546e58eb419a9e0e8a79ab398fc6a24b" }
+
+tts-api-server = { git = "https://github.com/lambdawalker/python.tts.api.server", rev = "9257bc16e60be92e8418455453c3f00bd6ac0f13" }
+
+[dependency-groups]
+dev = ["tts-api-server==0.1.0", "pytest>=8,<9", "pytest-asyncio>=0.24,<2", "ruff>=0.11", "build", "twine"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tts_llm_demo"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
