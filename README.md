@@ -22,6 +22,19 @@ On Windows PowerShell, use `Copy-Item config.example.yaml config.yaml`.
 Open **http://127.0.0.1:7860**. No login is required. One shared workspace persists
 across browser refreshes and application restarts. One task runs at a time.
 
+### LM Studio
+
+The same OpenAI-compatible transport can connect to LM Studio. Set `llm.base_url`
+to `http://<windows-lan-ip>:1234/v1` and `llm.model` to the exact model ID returned
+by that server's `/v1/models`. Enable access from the network when the demo runs
+on another machine. The loaded model and chat template must support tool calling.
+
+The demo sends one leading system message containing instructions and runtime
+context, accommodating templates that reject additional system messages. If a
+request fails, check the LM Studio console for the underlying template/model error.
+This compatibility fix is covered by a simulated template-rejection regression test;
+a live Windows LM Studio run still needs verification.
+
 ### Remote vLLM
 
 Set `llm.base_url` to the vLLM OpenAI-compatible URL **including `/v1`**, for example
