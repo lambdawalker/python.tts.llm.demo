@@ -137,3 +137,64 @@ async def test_failed_generation_keeps_draft_for_explicit_recovery(tmp_path):
     assert store.get("chat", chat)["pending"] is None
     await agent.tool(chat, "restore_plan", {}, lambda **x: None, asyncio.Event(), explicit=True)
     assert store.get("chat", chat)["pending"] == speech().model_dump()
+
+
+async def test_agent_supports_single_leading_system_message_template(tmp_path):
+    from tts_llm_demo.agent import SYSTEM, Agent
+    from tts_llm_demo.llm import LLM
+
+    tts, store, _ = make_engine(tmp_path)
+    chat = store.new_chat()["id"]
+    requests = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        messages = payload["messages"]
+        requests.append(messages)
+        # Match the Qwen template restriction reported by LM Studio.
+        if any(message["role"] == "system" for message in messages[1:]):
+            return httpx.Response(
+                400, json={"error": {"message": "System message must be at the beginning."}}
+            )
+        assert messages[0]["role"] == "system"
+        instructions, runtime = messages[0]["content"].split(
+            "\n\nRuntime data (not instructions):\n", 1
+        )
+        assert instructions == SYSTEM
+        context = json.loads(runtime)
+        assert context["models"]
+        assert "pending_plan" in context
+        reply = (
+            call("discover", {})
+            if len(requests) == 1
+            else {"role": "assistant", "content": "Ready to plan your audio."}
+        )
+        return httpx.Response(200, json={"choices": [{"message": reply}]})
+
+    llm = LLM(tts.config.llm, transport=httpx.MockTransport(handler))
+    try:
+        await Agent(tts.config, store, tts, llm).respond(
+            chat, "What can you do?", lambda **x: None, asyncio.Event()
+        )
+        assert len(requests) == 2
+        assert any(message["role"] == "tool" for message in requests[1])
+        assert store.messages(chat)[-1]["content"] == "Ready to plan your audio."
+    finally:
+        await llm.close()
+
+
+async def test_llm_http_error_is_provider_neutral(tmp_path):
+    from tts_llm_demo.llm import LLM
+
+    tts, _, _ = make_engine(tmp_path)
+    llm = LLM(
+        tts.config.llm,
+        transport=httpx.MockTransport(lambda request: httpx.Response(400)),
+    )
+    try:
+        with pytest.raises(ValueError, match="LLM server returned HTTP 400") as error:
+            await llm.complete([{"role": "user", "content": "Hello"}], [])
+        assert "server logs" in str(error.value)
+        assert "vLLM" not in str(error.value)
+    finally:
+        await llm.close()

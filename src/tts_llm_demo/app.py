@@ -133,7 +133,7 @@ def create_app(config, *, tts_client=None, llm=None):
                 elif isinstance(exc, (ValueError, TimeoutError)):
                     error = str(exc)
                 elif isinstance(exc, httpx.HTTPError):
-                    error = "Cannot reach vLLM. Check its address and server status."
+                    error = "Cannot reach LLM server. Check its address and server status."
                 else:
                     error = f"{type(exc).__name__}: operation failed. Check service connectivity."
                 # Avoid logging upstream request bodies or credentials.

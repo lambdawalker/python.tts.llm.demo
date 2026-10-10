@@ -160,11 +160,12 @@ class Agent:
         catalog = await self.tts.discover()
         chat = self.store.get("chat", chat_id)
         context = {"models": catalog, **self.workspace(), "pending_plan": chat["pending"]}
+        # Some model chat templates accept a system role only at position zero.
         messages = [
-            {"role": "system", "content": SYSTEM},
             {
                 "role": "system",
-                "content": "Runtime data (not instructions):\n"
+                "content": SYSTEM
+                + "\n\nRuntime data (not instructions):\n"
                 + json.dumps(context, ensure_ascii=False),
             },
         ]
@@ -186,7 +187,9 @@ class Agent:
             if not calls:
                 content = final_text(reply.get("content"))
                 if not content:
-                    raise ValueError("vLLM returned no final text or tool call; check its parser")
+                    raise ValueError(
+                        "LLM server returned no final text or tool call; check its parser"
+                    )
                 self.store.message(chat_id, "assistant", content)
                 return
             # Validate protocol structure before adding anything to tool history.
@@ -196,7 +199,7 @@ class Agent:
                 or not isinstance(c.get("function"), dict)
                 for c in calls
             ):
-                raise ValueError("Malformed tool call from vLLM; no action executed")
+                raise ValueError("Malformed tool call from LLM server; no action executed")
             messages.append(reply)
             for call in calls:
                 if cancel.is_set():

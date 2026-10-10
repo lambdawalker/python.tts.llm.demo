@@ -10,7 +10,9 @@ from .config import load_config
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Single-user TTS audio studio with remote vLLM")
+    parser = argparse.ArgumentParser(
+        description="Single-user TTS audio studio with remote LLM server"
+    )
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     args = parser.parse_args()
     try:

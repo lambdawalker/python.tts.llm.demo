@@ -1,4 +1,4 @@
-"""Minimal vLLM OpenAI-compatible chat transport, with no write retries."""
+"""Minimal OpenAI-compatible chat transport, with no write retries."""
 
 import os
 import re
@@ -44,27 +44,28 @@ class LLM:
         )
         if not response.is_success:
             raise ValueError(
-                f"vLLM returned HTTP {response.status_code}. Check the configured model, "
-                "API key and vLLM automatic tool-calling/parser settings."
+                f"LLM server returned HTTP {response.status_code}. Check the configured model, "
+                "API key and tool-calling/chat-template settings; "
+                "see the LLM server logs for details."
             )
         try:
             choice = response.json()["choices"][0]
             message = choice["message"]
             if choice.get("finish_reason") == "length":
                 raise ValueError(
-                    "vLLM output was truncated; increase max_tokens or shorten the task"
+                    "LLM server output was truncated; increase max_tokens or shorten the task"
                 )
             if not isinstance(message, dict) or message.get("role") != "assistant":
-                raise ValueError("Invalid assistant response from vLLM")
+                raise ValueError("Invalid assistant response from LLM server")
             # Do not persist/send private reasoning fields as ordinary user-visible text.
             result = {"role": "assistant", "content": final_text(message.get("content")) or None}
             if message.get("tool_calls"):
                 if not isinstance(message["tool_calls"], list) or len(message["tool_calls"]) > 12:
-                    raise ValueError("Invalid or excessive tool calls from vLLM")
+                    raise ValueError("Invalid or excessive tool calls from LLM server")
                 result["tool_calls"] = message["tool_calls"]
             return result
         except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError("vLLM returned an invalid chat completion") from exc
+            raise ValueError("LLM server returned an invalid chat completion") from exc
 
     async def close(self):
         await self.http.aclose()
