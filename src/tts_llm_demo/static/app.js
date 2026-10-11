@@ -4,6 +4,8 @@ let state = null, current = sessionStorage.getItem('chat'), busy = false, pollin
 let messageKey = '', reviewKey = '', assetsKey = '', voicesKey = '', playbackSeen = null;
 let draft = null;
 const selectedAssets = new Set();
+const selectedChats = new Set();
+let chatsKey = "";
 const el = (tag, text, cls) => { const n = document.createElement(tag); if(text !== undefined) n.textContent=text; if(cls)n.className=cls; return n; };
 function error(e){ $('error').textContent=e.message || String(e); $('error').hidden=false; }
 async function api(path, body, method='POST') {
@@ -17,7 +19,30 @@ document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>swit
 function selectChat(id){current=id;sessionStorage.setItem('chat',id);messageKey='';reviewKey='';render();switchTab('chat');}
 $('reset-session').onclick=()=>mutate(async()=>{await api('/api/tts/reset-session');$('error').textContent='TTS session reset. Your next task will use a fresh session; local assets and voices are retained.';$('error').hidden=false;});
 $('new-chat').onclick=()=>mutate(async()=>{const c=await api('/api/chats');current=c.id;sessionStorage.setItem('chat',current);messageKey='';reviewKey='';switchTab('chat');});
-$('delete-chat').onclick=()=>{if(!current||!window.confirm('Delete this conversation and its chat history? Generated audio and saved voices will be kept.'))return;mutate(async()=>{await api(`/api/chats/${current}`,undefined,'DELETE');current=null;sessionStorage.removeItem('chat');messageKey='';reviewKey='';});};
+async function deleteChats(ids){
+ if(!ids.length||!window.confirm(`Delete ${ids.length} conversation(s) and their chat history? Generated audio and saved voices will be kept.`))return;
+ await mutate(async()=>{await api('/api/chats/delete',{chat_ids:ids});ids.forEach(id=>selectedChats.delete(id));if(ids.includes(current)){current=null;sessionStorage.removeItem('chat');messageKey='';reviewKey='';}});
+}
+$('delete-chat').onclick=()=>deleteChats(current?[current]:[]);
+$('select-all-chats').onclick=()=>{state.chats.forEach(c=>selectedChats.add(c.id));renderChats();};
+$('clear-chats').onclick=()=>{selectedChats.clear();renderChats();};
+$('delete-selected-chats').onclick=()=>deleteChats([...selectedChats]);
+function renderChats(){
+ for(const id of selectedChats)if(!state.chats.some(c=>c.id===id))selectedChats.delete(id);
+ const key=JSON.stringify([state.chats.map(c=>[c.id,c.title]),current]);
+ if(key!==chatsKey){chatsKey=key;const list=$('chats');list.replaceChildren();state.chats.forEach(c=>{
+  const row=el('div',undefined,'chat-row');row.dataset.chatId=c.id;
+  const check=el('input');check.type='checkbox';check.dataset.selectChat=c.id;check.setAttribute('aria-label',`Select conversation: ${c.title}`);check.onchange=()=>{if(check.checked)selectedChats.add(c.id);else selectedChats.delete(c.id);renderChats();};
+  const open=button(c.title,()=>selectChat(c.id),c.id===current?'chat-open selected':'chat-open');open.title=c.title;
+  const remove=button('×',()=>deleteChats([c.id]),'chat-delete');remove.setAttribute('aria-label',`Delete conversation: ${c.title}`);remove.title='Delete conversation';
+  row.append(check,open,remove);list.append(row);
+ });}
+ const running=!!activeRun();
+ $('chats').querySelectorAll('[data-select-chat]').forEach(input=>{input.checked=selectedChats.has(input.dataset.selectChat);input.disabled=running;});
+ $('chats').querySelectorAll('.chat-delete').forEach(b=>b.disabled=running);
+ $('select-all-chats').disabled=running||!state.chats.length;$('clear-chats').disabled=!selectedChats.size;
+ $('delete-selected-chats').disabled=running||!selectedChats.size;$('chat-selection-count').textContent=`${selectedChats.size} selected`;
+}
 $('delete-clips').onchange=()=>mutate(async()=>{try{await api('/api/settings',{delete_clips:$('delete-clips').checked},'PUT');}catch(e){$('delete-clips').checked=state.settings.delete_clips;throw e;}});
 async function ensureChat(){if(!current){const chat=await api('/api/chats');current=chat.id;sessionStorage.setItem('chat',current);}}
 $('composer').onsubmit=e=>{e.preventDefault();const text=$('message').value.trim();if(!text)return;mutate(async()=>{await ensureChat();await api(`/api/chats/${current}/messages`,{text});$('message').value='';});};
@@ -31,7 +56,7 @@ function play(asset){$('player').dataset.assetId=asset.id;$('player-area').hidde
 document.addEventListener('play',event=>{if(event.target.tagName==='AUDIO')document.querySelectorAll('audio').forEach(audio=>{if(audio!==event.target)audio.pause();});},true);
 function renderReview(chat){
  const result=chat && (Object.hasOwn(chat,'last_asset_id')?state.assets.find(a=>a.id===chat.last_asset_id):[...state.assets].reverse().find(a=>a.chat_id===chat.id&&a.kind!=='clip'&&JSON.stringify(a.plan)===JSON.stringify(chat.last_plan)));
- const key=JSON.stringify([chat?.id,chat?.pending,chat?.last_plan,result?.id]);if(key===reviewKey)return;reviewKey=key;const box=$('review');box.querySelectorAll('audio').forEach(audio=>audio.pause());box.replaceChildren();box.hidden=!chat?.pending&&!chat?.last_plan;if(!chat?.pending){if(chat?.last_plan){const controls=el('div',undefined,'result-controls');controls.append(button('Revisit last plan',()=>mutate(()=>action('restore'))));if(result){const player=el('audio');player.controls=true;player.preload='metadata';player.src=`/api/assets/${result.id}/audio`;player.dataset.assetId=result.id;player.setAttribute('aria-label',`Listen to ${result.title}`);controls.append(player);box.append(el('h3',result.title));}box.append(controls);}return;}
+ const key=JSON.stringify([chat?.id,chat?.pending,chat?.last_plan,result?.id]);if(key===reviewKey)return;reviewKey=key;const box=$('review-content');box.querySelectorAll('audio').forEach(audio=>audio.pause());box.replaceChildren();box.hidden=!chat?.pending&&!chat?.last_plan;if(!chat?.pending){if(chat?.last_plan){box.append(el('h3',result?.title||chat.last_plan.title));const controls=el('div',undefined,'result-controls');controls.append(button('Revisit last plan',()=>mutate(()=>action('restore'))));if(result){const player=el('audio');player.controls=true;player.preload='metadata';player.src=`/api/assets/${result.id}/audio`;player.dataset.assetId=result.id;player.setAttribute('aria-label',`Listen to ${result.title}`);controls.append(player);}box.append(controls);}return;}
  draft=structuredClone(chat.pending);box.append(el('h3',draft.title),el('p','Would you like to review first? Edit below, or choose Generate now.'));
  const detail=el('details');detail.append(el('summary',draft.kind==='speech'?'Review script':'Review voice description'));
  if(draft.kind==='voice_design'){
@@ -95,12 +120,12 @@ function renderAssets(){
 function renderVoices(){const key=JSON.stringify(state.voices);if(key===voicesKey)return;voicesKey=key;const target=$('voices');target.replaceChildren();if(!state.voices.length){target.append(el('div','Save a designed voice from Assets to use it again.', 'empty'));return;}state.voices.forEach(v=>{const card=el('article',undefined,'card');card.append(el('span','SAVED REFERENCE','kind'),el('h3',v.name),el('p',v.description),el('p',v.model));const asset=state.assets.find(a=>a.id===v.asset_id);if(asset)card.append(button('▶ Preview',()=>play(asset)));card.append(button('Use in chat',()=>{switchTab('chat');$('message').value=`Use my saved voice ${v.name} to say: `;$('message').focus();}));target.append(card);});}
 function render(){
  if(!state)return;if(!state.chats.some(c=>c.id===current))current=state.chats[0]?.id;
- const list=$('chats');list.replaceChildren();state.chats.forEach(c=>list.append(button(c.title,()=>selectChat(c.id),c.id===current?'selected':'')));
+ renderChats();
  const messages=state.messages.filter(m=>m.chat_id===current),key=JSON.stringify(messages);if(key!==messageKey){messageKey=key;$('messages').replaceChildren();messages.forEach(m=>{const node=el('div',undefined,`message ${m.role}`);if(m.role!=='status')node.append(el('small',m.role==='user'?'YOU':'AUDIO ASSISTANT'));node.append(document.createTextNode(m.content));$('messages').append(node);});}
  $('welcome').hidden=messages.length>0;renderReview(state.chats.find(c=>c.id===current));
- const run=activeRun();$('progress').hidden=!run;$('send').disabled=!!run;$('new-chat').disabled=!!run;$('reset-session').disabled=!!run;$('delete-chat').disabled=!!run||!current;$('delete-clips').disabled=!!run;$('delete-clips').checked=state.settings.delete_clips;
- $('review').querySelectorAll('button,textarea').forEach(b=>b.disabled=!!run);
- if(run){$('stage').textContent=run.stage;$('counts').textContent=run.total?`${run.completed} / ${run.total} turns complete`:'';$('cancel').disabled=run.status==='cancelling';}
+ const run=activeRun();$('progress').hidden=!run;$('review').hidden=$('review-content').hidden&&!run;$('send').disabled=!!run;$('new-chat').disabled=!!run;$('reset-session').disabled=!!run;$('delete-chat').disabled=!!run||!current;$('delete-clips').disabled=!!run;$('delete-clips').checked=state.settings.delete_clips;
+ $('review-content').querySelectorAll('button,textarea').forEach(b=>b.disabled=!!run);
+ if(run){$('stage').textContent=(run.chat_id!==current?'Another conversation: ':'')+run.stage;$('counts').textContent=run.total?`${run.completed} / ${run.total} turns complete`:'';$('cancel').disabled=run.status==='cancelling';}
  $('asset-count').textContent=state.assets.length;$('voice-count').textContent=state.voices.length;renderAssets();renderVoices();updateSelection();
  document.querySelectorAll('audio[data-asset-id]').forEach(audio=>{if(!state.assets.some(a=>a.id===audio.dataset.assetId)){audio.pause();audio.removeAttribute('src');audio.load();delete audio.dataset.assetId;if(audio.id==='player')$('player-area').hidden=true;}});
  if(playbackSeen===null)playbackSeen=new Set(state.playback.map(p=>p.id));else for(const event of state.playback){if(!playbackSeen.has(event.id)){playbackSeen.add(event.id);if(event.chat_id===current){const asset=state.assets.find(a=>a.id===event.asset_id);if(asset)play(asset);}}}

@@ -82,3 +82,7 @@ class Settings(Input):
 
 class DeleteAssets(Input):
     asset_ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class DeleteChats(Input):
+    chat_ids: list[str] = Field(min_length=1, max_length=1000)
