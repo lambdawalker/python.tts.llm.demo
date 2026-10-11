@@ -218,6 +218,38 @@ class TTS:
             raise
 
     async def execute(self, plan, chat_id, progress, cancel):
+        job_id = uid()
+        self.store.put(
+            "job",
+            dict(id=job_id, chat_id=chat_id, title=plan.title, created_at=now(), status="running"),
+        )
+        delete_clips = self.store.settings()["delete_clips"]
+        try:
+            result = await self._execute(plan, chat_id, progress, cancel, job_id)
+        except asyncio.CancelledError:
+            self.store.update("job", job_id, status="cancelled")
+            raise
+        except Exception:
+            self.store.update("job", job_id, status="failed")
+            raise
+        self.store.update("job", job_id, status="succeeded")
+        # Only remove inputs once the combined output is durably saved. A cleanup
+        # error must not turn successful generation into a failure or trigger replay.
+        if delete_clips and result.get("clips"):
+            retained = []
+            for clip_id in result["clips"]:
+                try:
+                    self.store.audio_path(clip_id).unlink(missing_ok=True)
+                except OSError:
+                    retained.append(clip_id)
+                    continue
+                self.store.delete("asset", clip_id)
+            result = self.store.update(
+                "asset", result["id"], clips=retained, clips_deleted=not retained
+            )
+        return result
+
+    async def _execute(self, plan, chat_id, progress, cancel, job_id):
         catalog = await self.discover()
         self.validate(plan, catalog)
         if cancel.is_set():
@@ -238,6 +270,7 @@ class TTS:
                 chat_id,
                 plan.title,
                 "voice_preview",
+                job_id=job_id,
                 transcript=plan.preview_text,
                 description=plan.description,
                 model=plan.model,
@@ -289,6 +322,7 @@ class TTS:
                 chat_id,
                 f"{plan.title} · {index + 1}: {turn.speaker}",
                 "clip",
+                job_id=job_id,
                 transcript=turn.text,
                 speaker=turn.speaker,
                 model=request["model"],
@@ -318,6 +352,8 @@ class TTS:
                 created_at=now(),
                 duration=info.duration,
                 sample_rate=info.samplerate,
+                job_id=job_id,
+                clips_deleted=False,
                 clips=[c["id"] for c in clips],
                 plan=plan.model_dump(),
             ),

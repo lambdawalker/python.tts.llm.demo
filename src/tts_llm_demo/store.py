@@ -27,6 +27,9 @@ class Store:
             "(kind TEXT, id TEXT PRIMARY KEY, data TEXT NOT NULL)"
         )
         self.db.commit()
+        for job in self.list("job"):
+            if job["status"] == "running":
+                self.update("job", job["id"], status="interrupted")
         for run in self.list("run"):
             if run["status"] in {"running", "cancelling"}:
                 self.update(
@@ -93,6 +96,24 @@ class Store:
     def delete(self, kind, identifier):
         self.db.execute("DELETE FROM records WHERE kind=? AND id=?", (kind, identifier))
         self.db.commit()
+
+    def settings(self):
+        try:
+            return self.get("settings", "workspace")
+        except KeyError:
+            return {"id": "workspace", "delete_clips": False}
+
+    def delete_chat(self, chat_id):
+        self.get("chat", chat_id)
+        # Keep audio, job provenance and saved voice references independently of chats.
+        with self.db:
+            for kind in ("message", "run", "playback"):
+                for record in self.list(kind):
+                    if record.get("chat_id") == chat_id:
+                        self.db.execute(
+                            "DELETE FROM records WHERE kind=? AND id=?", (kind, record["id"])
+                        )
+            self.db.execute("DELETE FROM records WHERE kind='chat' AND id=?", (chat_id,))
 
     def close(self):
         self.db.close()

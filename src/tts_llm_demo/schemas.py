@@ -74,3 +74,7 @@ class Action(Input):
     asset_id: str | None = None
     name: str | None = None
     model: str | None = None
+
+
+class Settings(Input):
+    delete_clips: bool = False

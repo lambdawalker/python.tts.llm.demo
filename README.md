@@ -167,3 +167,22 @@ node tests/browser_smoke.cjs
 See [architecture](docs/architecture.md), [hardware smoke test](docs/smoke-test.md),
 and the [central TTS design](https://github.com/lambdawalker/design.ai/tree/main/tts).
 No live vLLM, DGX Spark GPU, or acoustic quality claim is implied by fixture tests.
+
+### Managing conversations and generated audio
+
+Use **Delete conversation** in Chat to remove its history and drafts. A confirmation
+explains that generated audio and saved voices remain available. Deletion is disabled
+while a task is running; cancel or wait first.
+
+Assets are grouped by generation job, with the finished audio first and individual
+clips in an expandable section. Each generation attempt has its own group, including
+partial results from failed or cancelled jobs. A demo generation job may involve
+several remote TTS jobs. Older combined assets are grouped with their recorded clips;
+older orphan clips remain under “Earlier ungrouped clips”.
+
+In Assets, enable **Delete individual clips after assembling audio** to remove local
+intermediate WAV files and their asset entries after successful assembly. The setting
+is off by default, persists across restarts, and applies only to future jobs. Final
+audio, voice previews and saved voices remain. Failed/cancelled jobs retain completed
+clips. If a file cannot be deleted, it stays listed for recovery. Remote TTS storage
+is unaffected.
