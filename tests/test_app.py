@@ -119,6 +119,12 @@ def test_delete_and_settings_blocked_during_generation(tmp_path):
             f"/api/chats/{chat['id']}/actions", headers=HEADERS, json={"action": "generate"}
         )
         assert response.status_code == 202
+        assert (
+            client.post(
+                "/api/chats/delete", headers=HEADERS, json={"chat_ids": [chat["id"]]}
+            ).status_code
+            == 409
+        )
         asset = seed_asset(app.state.store, "f")
         assert client.delete(f"/api/assets/{asset}", headers=HEADERS).status_code == 409
         assert (
@@ -207,3 +213,34 @@ def test_delete_reports_locked_file_without_removing_its_record(tmp_path, monkey
         assert store.get("asset", locked)
         assert store.audio_path(locked).exists()
         assert not store.audio_path(free).exists()
+
+
+def test_bulk_chat_delete_validates_selection_and_preserves_other_records(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        store = app.state.store
+        chats = [store.new_chat() for _ in range(3)]
+        for chat in chats:
+            store.message(chat["id"], "user", chat["id"])
+        store.put("voice", {"id": "voice", "asset_id": "a" * 32})
+        asset = seed_asset(store, "a", chat_id=chats[0]["id"])
+        selected = [c["id"] for c in chats[:2]]
+        assert (
+            client.post(
+                "/api/chats/delete", headers=HEADERS, json={"chat_ids": [selected[0], "missing"]}
+            ).status_code
+            == 404
+        )
+        assert len(store.list("chat")) == 3
+        assert client.post("/api/chats/delete", json={"chat_ids": selected}).status_code == 403
+        response = client.post(
+            "/api/chats/delete", headers=HEADERS, json={"chat_ids": selected + selected}
+        )
+        assert response.json() == {"deleted": selected}
+        assert [c["id"] for c in store.list("chat")] == [chats[2]["id"]]
+        assert [m["content"] for m in store.list("message")] == [chats[2]["id"]]
+        assert store.audio_path(asset).is_file() and store.list("voice")
+        assert (
+            client.post("/api/chats/delete", headers=HEADERS, json={"chat_ids": []}).status_code
+            == 422
+        )

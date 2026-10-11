@@ -199,3 +199,13 @@ audio is protected. Deletion is blocked while a task runs. If Windows or another
 process locks a file, it stays listed and the UI reports the failed deletion so you
 can close its player and retry. Successful deletions update clip lists and playback
 references. Remote TTS storage is unaffected.
+
+The left conversation list also provides a delete button on each row. Use its
+checkboxes or **Select all**, then **Delete selected conversations** to remove
+multiple chats in one confirmed action. The current chat stays open if it was not
+selected; deleting it opens another remaining chat or an empty composer. All selected
+chats are checked before deletion, and audio/saved voices remain available.
+
+Progress, completed-turn counts and **Cancel** now appear inside the green plan card.
+The same card shows the result player when generation finishes. While another chat
+is selected, progress explicitly indicates that the task belongs to another conversation.

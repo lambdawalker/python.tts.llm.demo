@@ -108,16 +108,26 @@ class Store:
             return {"id": "workspace", "delete_clips": False}
 
     def delete_chat(self, chat_id):
-        self.get("chat", chat_id)
+        self.delete_chats([chat_id])
+
+    def delete_chats(self, identifiers):
+        identifiers = list(dict.fromkeys(identifiers))
+        for chat_id in identifiers:
+            self.get("chat", chat_id)
+        selected = set(identifiers)
         # Keep audio, job provenance and saved voice references independently of chats.
         with self.db:
             for kind in ("message", "run", "playback"):
                 for record in self.list(kind):
-                    if record.get("chat_id") == chat_id:
+                    if record.get("chat_id") in selected:
                         self.db.execute(
                             "DELETE FROM records WHERE kind=? AND id=?", (kind, record["id"])
                         )
-            self.db.execute("DELETE FROM records WHERE kind='chat' AND id=?", (chat_id,))
+            self.db.executemany(
+                "DELETE FROM records WHERE kind='chat' AND id=?",
+                [(chat_id,) for chat_id in identifiers],
+            )
+        return {"deleted": identifiers}
 
     def delete_assets(self, identifiers):
         identifiers = list(dict.fromkeys(identifiers))

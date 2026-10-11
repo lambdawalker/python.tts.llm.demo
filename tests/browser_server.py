@@ -1,5 +1,6 @@
 """Deterministic UI smoke fixture. Never used by the production launcher."""
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -34,6 +35,21 @@ replies.extend(
         {"role": "assistant", "content": "Ready for another generation."},
     ]
 )
-app = create_app(config, tts_client=FakeTTS(), llm=ScriptedLLM(replies))
+replies.extend(
+    [
+        call("propose_plan", speech().model_dump()),
+        {"role": "assistant", "content": "Review this cancellable generation."},
+    ]
+)
+
+
+class BrowserTTS(FakeTTS):
+    async def generate_speech(self, **kwargs):
+        # Keep real run lifecycle visible long enough to exercise progress and Cancel.
+        await asyncio.sleep(1)
+        return await super().generate_speech(**kwargs)
+
+
+app = create_app(config, tts_client=BrowserTTS(), llm=ScriptedLLM(replies))
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=7861)
