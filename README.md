@@ -186,3 +186,16 @@ is off by default, persists across restarts, and applies only to future jobs. Fi
 audio, voice previews and saved voices remain. Failed/cancelled jobs retain completed
 clips. If a file cannot be deleted, it stays listed for recovery. Remote TTS storage
 is unaffected.
+
+After generation, the Chat card shows an audio player next to **Revisit last plan**.
+Use its play/pause, seek and volume controls to listen without switching tabs.
+Playback starts only when requested, and regular workspace polling preserves position.
+
+Each asset has a **Delete** button and a selection checkbox. Select several assets
+(or **Select all deletable assets**, including collapsed clips), then choose
+**Delete selected** and confirm. Only selected local audio files are removed; deleting
+a combined recording does not delete its clips, or vice versa. Saved-voice reference
+audio is protected. Deletion is blocked while a task runs. If Windows or another
+process locks a file, it stays listed and the UI reports the failed deletion so you
+can close its player and retry. Successful deletions update clip lists and playback
+references. Remote TTS storage is unaffected.

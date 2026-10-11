@@ -53,6 +53,7 @@ def test_http_review_generate_download_and_restart(tmp_path):
         assert wait_run(client, response.json()["id"])["status"] == "succeeded"
         state = client.get("/api/state").json()
         asset = state["assets"][-1]
+        assert state["chats"][0]["last_asset_id"] == asset["id"]
         assert client.get(f"/api/assets/{asset['id']}/audio").content[:4] == b"RIFF"
         assert "secret" not in state
         assert (
@@ -118,6 +119,14 @@ def test_delete_and_settings_blocked_during_generation(tmp_path):
             f"/api/chats/{chat['id']}/actions", headers=HEADERS, json={"action": "generate"}
         )
         assert response.status_code == 202
+        asset = seed_asset(app.state.store, "f")
+        assert client.delete(f"/api/assets/{asset}", headers=HEADERS).status_code == 409
+        assert (
+            client.post(
+                "/api/assets/delete", headers=HEADERS, json={"asset_ids": [asset]}
+            ).status_code
+            == 409
+        )
         assert client.delete(f"/api/chats/{chat['id']}", headers=HEADERS).status_code == 409
         assert (
             client.put("/api/settings", headers=HEADERS, json={"delete_clips": True}).status_code
@@ -126,3 +135,75 @@ def test_delete_and_settings_blocked_during_generation(tmp_path):
         run_id = response.json()["id"]
         client.post(f"/api/runs/{run_id}/cancel", headers=HEADERS)
         assert wait_run(client, run_id)["status"] == "cancelled"
+
+
+def seed_asset(store, digit, **fields):
+    asset = store.put("asset", {"id": digit * 32, "kind": "clip", **fields})
+    store.audio_path(asset["id"]).write_bytes(b"audio")
+    return asset["id"]
+
+
+def test_bulk_delete_removes_files_and_references_only_for_selected_assets(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        store = app.state.store
+        clip = seed_asset(store, "a")
+        combined = seed_asset(store, "b", kind="conversation", clips=[clip])
+        chat = store.new_chat()
+        store.update("chat", chat["id"], last_asset_id=combined)
+        store.put("playback", {"id": "event", "asset_id": clip, "chat_id": chat["id"]})
+        response = client.post("/api/assets/delete", headers=HEADERS, json={"asset_ids": [clip]})
+        assert response.status_code == 200
+        assert response.json() == {"deleted": [clip], "failed": []}
+        assert not store.audio_path(clip).exists()
+        assert store.get("asset", combined)["clips"] == []
+        assert not store.list("playback")
+        assert client.get(f"/api/assets/{clip}/audio").status_code == 404
+        assert client.get(f"/api/assets/{combined}/audio").status_code == 200
+        assert client.delete(f"/api/assets/{combined}", headers=HEADERS).status_code == 200
+        assert store.get("chat", chat["id"])["last_asset_id"] is None
+    with TestClient(make_app(tmp_path)) as client:
+        assert not client.get("/api/state").json()["assets"]
+
+
+def test_delete_batch_preflight_protects_saved_voices_and_unknown_ids(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        store = app.state.store
+        ordinary = seed_asset(store, "a")
+        reference = seed_asset(store, "b", kind="voice_preview")
+        store.put("voice", {"id": "voice", "asset_id": reference})
+        for ids, status in [([ordinary, reference], 409), ([ordinary, "c" * 32], 404), ([], 422)]:
+            assert (
+                client.post(
+                    "/api/assets/delete", headers=HEADERS, json={"asset_ids": ids}
+                ).status_code
+                == status
+            )
+            assert len(store.list("asset")) == 2
+            assert store.audio_path(ordinary).exists()
+        assert client.delete(f"/api/assets/{ordinary}").status_code == 403
+
+
+def test_delete_reports_locked_file_without_removing_its_record(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        store = app.state.store
+        locked, free = seed_asset(store, "a"), seed_asset(store, "b")
+        unlink = Path.unlink
+
+        def guarded(path, **kwargs):
+            if path.name == locked + ".wav":
+                raise PermissionError("file is in use")
+            return unlink(path, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", guarded)
+        response = client.post(
+            "/api/assets/delete", headers=HEADERS, json={"asset_ids": [locked, free, free]}
+        )
+        assert response.json() == {"deleted": [free], "failed": [locked]}
+        assert store.get("asset", locked)
+        assert store.audio_path(locked).exists()
+        assert not store.audio_path(free).exists()

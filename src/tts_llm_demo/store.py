@@ -15,6 +15,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+class AssetInUse(ValueError):
+    pass
+
+
 class Store:
     def __init__(self, directory: Path):
         self.directory = directory
@@ -114,6 +118,46 @@ class Store:
                             "DELETE FROM records WHERE kind=? AND id=?", (kind, record["id"])
                         )
             self.db.execute("DELETE FROM records WHERE kind='chat' AND id=?", (chat_id,))
+
+    def delete_assets(self, identifiers):
+        identifiers = list(dict.fromkeys(identifiers))
+        protected = {voice["asset_id"] for voice in self.list("voice")}
+        # Validate the complete selection before deleting any files.
+        for identifier in identifiers:
+            self.get("asset", identifier)
+            self.audio_path(identifier)
+            if identifier in protected:
+                raise AssetInUse("Reference audio used by a saved voice cannot be deleted.")
+        deleted, failed = [], []
+        for identifier in identifiers:
+            try:
+                self.audio_path(identifier).unlink(missing_ok=True)
+            except OSError:
+                failed.append(identifier)
+            else:
+                deleted.append(identifier)
+        removed = set(deleted)
+        with self.db:
+            for identifier in deleted:
+                self.db.execute("DELETE FROM records WHERE kind='asset' AND id=?", (identifier,))
+            for kind in ("asset", "chat", "playback"):
+                for record in self.list(kind):
+                    if kind == "playback" and record["asset_id"] in removed:
+                        self.db.execute(
+                            "DELETE FROM records WHERE kind=? AND id=?", (kind, record["id"])
+                        )
+                        continue
+                    if kind == "asset" and removed.intersection(record.get("clips", [])):
+                        record["clips"] = [c for c in record["clips"] if c not in removed]
+                    elif kind == "chat" and record.get("last_asset_id") in removed:
+                        record["last_asset_id"] = None
+                    else:
+                        continue
+                    self.db.execute(
+                        "UPDATE records SET data=? WHERE kind=? AND id=?",
+                        (json.dumps(record), kind, record["id"]),
+                    )
+        return {"deleted": deleted, "failed": failed}
 
     def close(self):
         self.db.close()

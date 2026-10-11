@@ -78,3 +78,7 @@ class Action(Input):
 
 class Settings(Input):
     delete_clips: bool = False
+
+
+class DeleteAssets(Input):
+    asset_ids: list[str] = Field(min_length=1, max_length=1000)

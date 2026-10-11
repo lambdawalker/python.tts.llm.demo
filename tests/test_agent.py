@@ -129,10 +129,12 @@ async def test_failed_generation_keeps_draft_for_explicit_recovery(tmp_path):
         raise ValueError("Server is unavailable")
 
     tts.execute = unavailable
+    store.update("chat", chat, last_asset_id="older-result")
     with pytest.raises(ValueError, match="unavailable"):
         await agent.tool(
             chat, "generate_pending", {}, lambda **x: None, asyncio.Event(), explicit=True
         )
+    assert store.get("chat", chat)["last_asset_id"] is None
     assert store.get("chat", chat)["last_plan"] == speech().model_dump()
     assert store.get("chat", chat)["pending"] is None
     await agent.tool(chat, "restore_plan", {}, lambda **x: None, asyncio.Event(), explicit=True)
