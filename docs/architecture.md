@@ -46,3 +46,14 @@ on startup. Chat deletion removes chat/message/run/playback records transactiona
 while asset/job provenance and saved voices remain independent. Workspace settings are
 persisted records; clip cleanup is read once at generation start and runs only after
 successful assembly. The preference is controlled by the browser, not by LLM tools.
+
+Chat `last_asset_id` links the result player to the last successful generation and is
+cleared when a new generation begins or that asset is deleted. Legacy chats can match
+their stored last plan to an existing combined asset. The browser keeps the audio node
+stable across polls and pauses other players when playback starts.
+
+`DELETE /api/assets/{id}` and `POST /api/assets/delete` (bounded `asset_ids` list)
+share whole-selection validation and saved-voice protection. File removal reports
+successes and OS failures separately; failed files retain their metadata. Successful
+removals reconcile asset clip lists, chat result links and queued playback records in
+a SQLite transaction. These are explicit browser actions, not LLM tools.

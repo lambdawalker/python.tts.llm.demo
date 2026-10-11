@@ -15,8 +15,8 @@ from tts_api_client import APIError
 
 from .agent import Agent
 from .llm import LLM
-from .schemas import Action, Message, Plan, SaveVoice, Settings
-from .store import Store, now, uid
+from .schemas import Action, DeleteAssets, Message, Plan, SaveVoice, Settings
+from .store import AssetInUse, Store, now, uid
 from .tts import TTS
 
 LOG = logging.getLogger(__name__)
@@ -243,6 +243,21 @@ def create_app(config, *, tts_client=None, llm=None):
             "status": "reset",
             "message": "Next task will create a new session. Local assets remain.",
         }
+
+    def remove_assets(identifiers):
+        idle()
+        try:
+            return app.state.store.delete_assets(identifiers)
+        except AssetInUse as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/assets/delete")
+    async def delete_assets(body: DeleteAssets):
+        return remove_assets(body.asset_ids)
+
+    @app.delete("/api/assets/{asset_id}")
+    async def delete_asset(asset_id: str):
+        return remove_assets([asset_id])
 
     @app.get("/api/assets/{asset_id}/audio")
     async def audio(asset_id: str, download: bool = False):

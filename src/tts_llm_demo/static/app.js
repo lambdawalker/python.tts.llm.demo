@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let state = null, current = sessionStorage.getItem('chat'), busy = false, polling = false;
 let messageKey = '', reviewKey = '', assetsKey = '', voicesKey = '', playbackSeen = null;
 let draft = null;
+const selectedAssets = new Set();
 const el = (tag, text, cls) => { const n = document.createElement(tag); if(text !== undefined) n.textContent=text; if(cls)n.className=cls; return n; };
 function error(e){ $('error').textContent=e.message || String(e); $('error').hidden=false; }
 async function api(path, body, method='POST') {
@@ -26,9 +27,11 @@ function activeRun(){return state?.runs.find(r=>['running','cancelling'].include
 $('cancel').onclick=()=>mutate(async()=>{const run=activeRun();if(run)await api(`/api/runs/${run.id}/cancel`);});
 async function action(action, fields={}){await ensureChat();await api(`/api/chats/${current}/actions`,{action,...fields});}
 function button(text, handler, cls){const b=el('button',text,cls);b.type='button';b.onclick=handler;return b;}
-function play(asset){$('player-area').hidden=false;$('player-title').textContent=asset.title;$('player').src=`/api/assets/${asset.id}/audio`;$('play-hint').textContent='';$('player').play().catch(()=>{$('play-hint').textContent='Click Play in the audio player to start.';});}
+function play(asset){$('player').dataset.assetId=asset.id;$('player-area').hidden=false;$('player-title').textContent=asset.title;$('player').src=`/api/assets/${asset.id}/audio`;$('play-hint').textContent='';$('player').play().catch(()=>{$('play-hint').textContent='Click Play in the audio player to start.';});}
+document.addEventListener('play',event=>{if(event.target.tagName==='AUDIO')document.querySelectorAll('audio').forEach(audio=>{if(audio!==event.target)audio.pause();});},true);
 function renderReview(chat){
- const key=JSON.stringify([chat?.pending,chat?.last_plan]);if(key===reviewKey)return;reviewKey=key;const box=$('review');box.replaceChildren();box.hidden=!chat?.pending&&!chat?.last_plan;if(!chat?.pending){if(chat?.last_plan)box.append(button('Revisit last plan',()=>mutate(()=>action('restore'))));return;}
+ const result=chat && (Object.hasOwn(chat,'last_asset_id')?state.assets.find(a=>a.id===chat.last_asset_id):[...state.assets].reverse().find(a=>a.chat_id===chat.id&&a.kind!=='clip'&&JSON.stringify(a.plan)===JSON.stringify(chat.last_plan)));
+ const key=JSON.stringify([chat?.id,chat?.pending,chat?.last_plan,result?.id]);if(key===reviewKey)return;reviewKey=key;const box=$('review');box.querySelectorAll('audio').forEach(audio=>audio.pause());box.replaceChildren();box.hidden=!chat?.pending&&!chat?.last_plan;if(!chat?.pending){if(chat?.last_plan){const controls=el('div',undefined,'result-controls');controls.append(button('Revisit last plan',()=>mutate(()=>action('restore'))));if(result){const player=el('audio');player.controls=true;player.preload='metadata';player.src=`/api/assets/${result.id}/audio`;player.dataset.assetId=result.id;player.setAttribute('aria-label',`Listen to ${result.title}`);controls.append(player);box.append(el('h3',result.title));}box.append(controls);}return;}
  draft=structuredClone(chat.pending);box.append(el('h3',draft.title),el('p','Would you like to review first? Edit below, or choose Generate now.'));
  const detail=el('details');detail.append(el('summary',draft.kind==='speech'?'Review script':'Review voice description'));
  if(draft.kind==='voice_design'){
@@ -36,8 +39,34 @@ function renderReview(chat){
  }else{draft.turns.forEach((turn,i)=>{const speaker=draft.speakers.find(s=>s.name===turn.speaker);const label=el('label',`${i+1}. ${turn.speaker} · ${speaker.model}`);const text=el('textarea');text.value=turn.text;text.rows=2;text.oninput=()=>turn.text=text.value;label.append(text);detail.append(label);});}
  box.append(detail);const controls=el('div',undefined,'actions');controls.append(button('Generate now',()=>mutate(async()=>{await api(`/api/chats/${current}/plan`,draft,'PUT');await action('generate');}),'primary'),button('Save edits',()=>mutate(async()=>{await api(`/api/chats/${current}/plan`,draft,'PUT');})),button('Discard',()=>mutate(()=>action('discard'))));box.append(controls);
 }
+function protectedAsset(id){return state.voices.some(v=>v.asset_id===id);}
+function updateSelection(){
+ const eligible=state.assets.filter(a=>!protectedAsset(a.id));
+ for(const id of selectedAssets)if(!eligible.some(a=>a.id===id))selectedAssets.delete(id);
+ const running=!!activeRun();
+ $('selection-count').textContent=`${selectedAssets.size} selected`;
+ $('delete-selected').disabled=running||!selectedAssets.size;
+ $('select-all-assets').disabled=running||!eligible.length;
+ $('clear-selection').disabled=!selectedAssets.size;
+ document.querySelectorAll('[data-select-asset]').forEach(input=>{input.checked=selectedAssets.has(input.dataset.selectAsset);input.disabled=running||protectedAsset(input.dataset.selectAsset);});
+ document.querySelectorAll('[data-delete-asset]').forEach(b=>b.disabled=running||protectedAsset(b.dataset.deleteAsset));
+}
+async function deleteAssets(ids){
+ if(!ids.length||!window.confirm(`Permanently delete ${ids.length} selected audio asset(s) from this workspace? Only selected files will be removed; unselected clips and combined audio will remain.`))return;
+ await mutate(async()=>{
+  document.querySelectorAll('audio').forEach(audio=>{if(ids.includes(audio.dataset.assetId)){audio.pause();audio.removeAttribute('src');audio.load();}});
+  let result;try{result=await api('/api/assets/delete',{asset_ids:ids});}catch(e){document.querySelectorAll('audio').forEach(audio=>{if(ids.includes(audio.dataset.assetId))audio.src=`/api/assets/${audio.dataset.assetId}/audio`;});throw e;}
+  result.deleted.forEach(id=>selectedAssets.delete(id));
+  document.querySelectorAll('audio').forEach(audio=>{if(result.failed.includes(audio.dataset.assetId))audio.src=`/api/assets/${audio.dataset.assetId}/audio`;});
+  await refresh();
+  if(result.failed.length)throw new Error(`${result.deleted.length} deleted; ${result.failed.length} could not be deleted. Close any players or programs using those files and try again.`);
+ });
+}
+$('select-all-assets').onclick=()=>{state.assets.filter(a=>!protectedAsset(a.id)).forEach(a=>selectedAssets.add(a.id));updateSelection();};
+$('clear-selection').onclick=()=>{selectedAssets.clear();updateSelection();};
+$('delete-selected').onclick=()=>deleteAssets([...selectedAssets]);
 function renderAssets(){
- const key=JSON.stringify([state.assets,state.jobs]);if(key===assetsKey)return;assetsKey=key;const target=$('assets');target.replaceChildren();
+ const key=JSON.stringify([state.assets,state.jobs,state.voices]);if(key===assetsKey)return;assetsKey=key;const target=$('assets');target.replaceChildren();
  if(!state.assets.length){target.append(el('div','Your generated audio will appear here.', 'empty'));return;}
  const groups=new Map();
  const parents=new Map();state.assets.forEach(a=>(a.clips||[]).forEach(id=>parents.set(id,a)));
@@ -53,7 +82,7 @@ function renderAssets(){
  const outputs=el('div',undefined,'grid'),clips=el('details',undefined,'job-clips'),clipGrid=el('div',undefined,'grid');
  const clipCount=group.assets.filter(a=>a.kind==='clip').length;
  clips.append(el('summary',`Individual clips (${clipCount})`),clipGrid);
- group.assets.filter(a=>a.kind!=='clip').concat(group.assets.filter(a=>a.kind==='clip')).forEach(asset=>{const card=el('article',undefined,'card');card.append(el('span',asset.kind.replaceAll('_',' '),'kind'),el('h3',asset.title),el('p',`${asset.duration.toFixed(1)} seconds · ${(asset.sample_rate/1000).toFixed(0)} kHz · WAV`));const actions=el('div',undefined,'actions');actions.append(button('▶ Play',()=>play(asset)));const download=el('a','Download');download.href=`/api/assets/${asset.id}/audio?download=true`;actions.append(download);card.append(actions);
+ group.assets.filter(a=>a.kind!=='clip').concat(group.assets.filter(a=>a.kind==='clip')).forEach(asset=>{const card=el('article',undefined,'card');card.dataset.assetId=asset.id;const selection=el('label',undefined,'asset-selection');const checkbox=el('input');checkbox.type='checkbox';checkbox.dataset.selectAsset=asset.id;checkbox.setAttribute('aria-label',`Select ${asset.title}`);checkbox.onchange=()=>{if(checkbox.checked)selectedAssets.add(asset.id);else selectedAssets.delete(asset.id);updateSelection();};selection.append(checkbox,document.createTextNode('Select'));card.append(selection);card.append(el('span',asset.kind.replaceAll('_',' '),'kind'),el('h3',asset.title),el('p',`${asset.duration.toFixed(1)} seconds · ${(asset.sample_rate/1000).toFixed(0)} kHz · WAV`));const actions=el('div',undefined,'actions');actions.append(button('▶ Play',()=>play(asset)));const download=el('a','Download');download.href=`/api/assets/${asset.id}/audio?download=true`;actions.append(download);const remove=button('Delete',()=>deleteAssets([asset.id]));remove.dataset.deleteAsset=asset.id;actions.append(remove);card.append(actions);if(protectedAsset(asset.id))card.append(el('p','Reference audio used by a saved voice; deletion is protected.'));
  if(asset.kind==='voice_preview'){
   if(asset.reusable_models?.length){const details=el('details');details.append(el('summary','Save as a reusable voice'));const form=el('form');const label=el('label','Voice name');const name=el('input');name.placeholder='e.g. Monica';name.required=true;name.maxLength=80;label.append(name);const modelLabel=el('label','Synthesis model');const model=el('select');asset.reusable_models.forEach(m=>{const o=el('option',m);o.value=m;model.append(o);});modelLabel.append(model);const save=el('button','Save voice','primary');save.type='submit';form.append(label,modelLabel,save);form.onsubmit=e=>{e.preventDefault();mutate(()=>action('save',{asset_id:asset.id,name:name.value,model:model.value}));};details.append(form);card.append(details);
   }else card.append(el('p','Preview only. The current service has no compatible voice-reuse model.'));
@@ -72,7 +101,8 @@ function render(){
  const run=activeRun();$('progress').hidden=!run;$('send').disabled=!!run;$('new-chat').disabled=!!run;$('reset-session').disabled=!!run;$('delete-chat').disabled=!!run||!current;$('delete-clips').disabled=!!run;$('delete-clips').checked=state.settings.delete_clips;
  $('review').querySelectorAll('button,textarea').forEach(b=>b.disabled=!!run);
  if(run){$('stage').textContent=run.stage;$('counts').textContent=run.total?`${run.completed} / ${run.total} turns complete`:'';$('cancel').disabled=run.status==='cancelling';}
- $('asset-count').textContent=state.assets.length;$('voice-count').textContent=state.voices.length;renderAssets();renderVoices();
+ $('asset-count').textContent=state.assets.length;$('voice-count').textContent=state.voices.length;renderAssets();renderVoices();updateSelection();
+ document.querySelectorAll('audio[data-asset-id]').forEach(audio=>{if(!state.assets.some(a=>a.id===audio.dataset.assetId)){audio.pause();audio.removeAttribute('src');audio.load();delete audio.dataset.assetId;if(audio.id==='player')$('player-area').hidden=true;}});
  if(playbackSeen===null)playbackSeen=new Set(state.playback.map(p=>p.id));else for(const event of state.playback){if(!playbackSeen.has(event.id)){playbackSeen.add(event.id);if(event.chat_id===current){const asset=state.assets.find(a=>a.id===event.asset_id);if(asset)play(asset);}}}
 }
 async function refresh(){const response=await fetch('/api/state');if(!response.ok)throw new Error('Cannot read the workspace.');state=await response.json();render();}

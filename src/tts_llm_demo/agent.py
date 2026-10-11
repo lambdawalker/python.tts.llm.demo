@@ -115,13 +115,14 @@ class Agent:
                     "Wait for a later user turn choosing generation or declining review"
                 )
             plan = Plan.model_validate(chat["pending"])
-            self.store.update("chat", chat_id, last_plan=plan.model_dump())
+            self.store.update("chat", chat_id, last_plan=plan.model_dump(), last_asset_id=None)
             # Consume before submission: a failure never invites an accidental duplicate click.
             self.store.update("chat", chat_id, pending=None, pending_turn=None)
             result = await self.tts.execute(plan, chat_id, progress, cancel)
             result = self.store.update(
                 "asset", result["id"], offered_chat=chat_id, offered_turn=chat["turn"]
             )
+            self.store.update("chat", chat_id, last_asset_id=result["id"])
             self.store.message(
                 chat_id, "status", f"Created “{result['title']}”. Find it in Assets."
             )
