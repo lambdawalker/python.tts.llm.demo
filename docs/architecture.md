@@ -39,3 +39,10 @@ Trust boundary: one local owner. Allowed Host values, a same-origin mutation hea
 validation, restrictive CSP, and text-only DOM rendering protect the local browser surface.
 They do not implement accounts or LAN-user isolation. Runtime credentials never enter
 `/api/state`, tool context, or browser storage. Restrict access to the data directory.
+
+Generation jobs have durable IDs separate from chat runs and remote TTS job IDs.
+Every new generated asset carries its generation `job_id`; interrupted jobs are marked
+on startup. Chat deletion removes chat/message/run/playback records transactionally,
+while asset/job provenance and saved voices remain independent. Workspace settings are
+persisted records; clip cleanup is read once at generation start and runs only after
+successful assembly. The preference is controlled by the browser, not by LLM tools.

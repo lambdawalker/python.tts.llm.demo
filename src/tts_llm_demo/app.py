@@ -15,7 +15,7 @@ from tts_api_client import APIError
 
 from .agent import Agent
 from .llm import LLM
-from .schemas import Action, Message, Plan, SaveVoice
+from .schemas import Action, Message, Plan, SaveVoice, Settings
 from .store import Store, now, uid
 from .tts import TTS
 
@@ -152,6 +152,8 @@ def create_app(config, *, tts_client=None, llm=None):
     async def state():
         store = app.state.store
         return {
+            "settings": store.settings(),
+            "jobs": store.list("job"),
             "chats": store.list("chat"),
             "messages": store.list("message"),
             "assets": store.list("asset"),
@@ -164,6 +166,17 @@ def create_app(config, *, tts_client=None, llm=None):
     async def new_chat():
         idle()
         return app.state.store.new_chat()
+
+    @app.delete("/api/chats/{chat_id}")
+    async def delete_chat(chat_id: str):
+        idle()
+        app.state.store.delete_chat(chat_id)
+        return {"status": "deleted"}
+
+    @app.put("/api/settings")
+    async def settings(body: Settings):
+        idle()
+        return app.state.store.put("settings", {"id": "workspace", **body.model_dump()})
 
     @app.post("/api/chats/{chat_id}/messages")
     async def message(chat_id: str, body: Message):

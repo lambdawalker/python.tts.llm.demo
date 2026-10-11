@@ -28,6 +28,12 @@ replies = [
         "a preview. You can then save it as Monica.",
     },
 ]
+replies.extend(
+    [
+        call("propose_plan", speech().model_dump()),
+        {"role": "assistant", "content": "Ready for another generation."},
+    ]
+)
 app = create_app(config, tts_client=FakeTTS(), llm=ScriptedLLM(replies))
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=7861)

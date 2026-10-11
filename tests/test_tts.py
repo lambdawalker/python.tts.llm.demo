@@ -184,3 +184,42 @@ async def test_invalid_later_turn_rejected_before_any_generation(tmp_path):
     with pytest.raises(ValueError, match="instructions"):
         await engine.execute(plan, store.new_chat()["id"], lambda **x: None, asyncio.Event())
     assert not [c for c in fake.calls if c[0] == "speech"]
+
+
+@pytest.mark.parametrize("cleanup", [False, True])
+async def test_generation_groups_assets_and_optionally_removes_clips(tmp_path, cleanup):
+    engine, store, _ = make_engine(tmp_path)
+    store.put("settings", {"id": "workspace", "delete_clips": cleanup})
+    chat = store.new_chat()["id"]
+    result = await engine.execute(speech(), chat, lambda **x: None, asyncio.Event())
+    job = store.list("job")[0]
+    assert job["status"] == "succeeded"
+    assert all(a["job_id"] == job["id"] for a in store.list("asset"))
+    assert len(store.list("asset")) == (1 if cleanup else 3)
+    assert len(list(store.audio_dir.glob("*.wav"))) == (1 if cleanup else 3)
+    assert result["clips_deleted"] == cleanup
+    assert len(result["clips"]) == (0 if cleanup else 2)
+    assert sf.info(store.audio_path(result["id"])).frames == 7200
+    second = await engine.execute(design(), chat, lambda **x: None, asyncio.Event())
+    assert second["job_id"] != result["job_id"]
+
+
+@pytest.mark.parametrize(
+    "failure, status", [(ValueError, "failed"), (asyncio.CancelledError, "cancelled")]
+)
+async def test_cleanup_keeps_completed_clips_on_failure(tmp_path, failure, status):
+    engine, store, fake = make_engine(tmp_path)
+    store.put("settings", {"id": "workspace", "delete_clips": True})
+    original = fake.generate_speech
+
+    async def fail_second(**kwargs):
+        if fake.jobs:
+            raise failure("generation failed")
+        return await original(**kwargs)
+
+    fake.generate_speech = fail_second
+    with pytest.raises(failure, match="generation failed"):
+        await engine.execute(speech(), store.new_chat()["id"], lambda **x: None, asyncio.Event())
+    assert store.list("job")[0]["status"] == status
+    assert len(store.list("asset")) == 1
+    assert store.audio_path(store.list("asset")[0]["id"]).is_file()

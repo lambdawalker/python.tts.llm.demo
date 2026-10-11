@@ -16,12 +16,15 @@ document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>swit
 function selectChat(id){current=id;sessionStorage.setItem('chat',id);messageKey='';reviewKey='';render();switchTab('chat');}
 $('reset-session').onclick=()=>mutate(async()=>{await api('/api/tts/reset-session');$('error').textContent='TTS session reset. Your next task will use a fresh session; local assets and voices are retained.';$('error').hidden=false;});
 $('new-chat').onclick=()=>mutate(async()=>{const c=await api('/api/chats');current=c.id;sessionStorage.setItem('chat',current);messageKey='';reviewKey='';switchTab('chat');});
-$('composer').onsubmit=e=>{e.preventDefault();const text=$('message').value.trim();if(!text)return;mutate(async()=>{await api(`/api/chats/${current}/messages`,{text});$('message').value='';});};
+$('delete-chat').onclick=()=>{if(!current||!window.confirm('Delete this conversation and its chat history? Generated audio and saved voices will be kept.'))return;mutate(async()=>{await api(`/api/chats/${current}`,undefined,'DELETE');current=null;sessionStorage.removeItem('chat');messageKey='';reviewKey='';});};
+$('delete-clips').onchange=()=>mutate(async()=>{try{await api('/api/settings',{delete_clips:$('delete-clips').checked},'PUT');}catch(e){$('delete-clips').checked=state.settings.delete_clips;throw e;}});
+async function ensureChat(){if(!current){const chat=await api('/api/chats');current=chat.id;sessionStorage.setItem('chat',current);}}
+$('composer').onsubmit=e=>{e.preventDefault();const text=$('message').value.trim();if(!text)return;mutate(async()=>{await ensureChat();await api(`/api/chats/${current}/messages`,{text});$('message').value='';});};
 $('message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('composer').requestSubmit();}});
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{$('message').value=b.dataset.prompt;$('message').focus();});
 function activeRun(){return state?.runs.find(r=>['running','cancelling'].includes(r.status));}
 $('cancel').onclick=()=>mutate(async()=>{const run=activeRun();if(run)await api(`/api/runs/${run.id}/cancel`);});
-async function action(action, fields={}){await api(`/api/chats/${current}/actions`,{action,...fields});}
+async function action(action, fields={}){await ensureChat();await api(`/api/chats/${current}/actions`,{action,...fields});}
 function button(text, handler, cls){const b=el('button',text,cls);b.type='button';b.onclick=handler;return b;}
 function play(asset){$('player-area').hidden=false;$('player-title').textContent=asset.title;$('player').src=`/api/assets/${asset.id}/audio`;$('play-hint').textContent='';$('player').play().catch(()=>{$('play-hint').textContent='Click Play in the audio player to start.';});}
 function renderReview(chat){
@@ -34,14 +37,31 @@ function renderReview(chat){
  box.append(detail);const controls=el('div',undefined,'actions');controls.append(button('Generate now',()=>mutate(async()=>{await api(`/api/chats/${current}/plan`,draft,'PUT');await action('generate');}),'primary'),button('Save edits',()=>mutate(async()=>{await api(`/api/chats/${current}/plan`,draft,'PUT');})),button('Discard',()=>mutate(()=>action('discard'))));box.append(controls);
 }
 function renderAssets(){
- const key=JSON.stringify(state.assets);if(key===assetsKey)return;assetsKey=key;const target=$('assets');target.replaceChildren();
+ const key=JSON.stringify([state.assets,state.jobs]);if(key===assetsKey)return;assetsKey=key;const target=$('assets');target.replaceChildren();
  if(!state.assets.length){target.append(el('div','Your generated audio will appear here.', 'empty'));return;}
- [...state.assets].reverse().forEach(asset=>{const card=el('article',undefined,'card');card.append(el('span',asset.kind.replaceAll('_',' '),'kind'),el('h3',asset.title),el('p',`${asset.duration.toFixed(1)} seconds · ${(asset.sample_rate/1000).toFixed(0)} kHz · WAV`));const actions=el('div',undefined,'actions');actions.append(button('▶ Play',()=>play(asset)));const download=el('a','Download');download.href=`/api/assets/${asset.id}/audio?download=true`;actions.append(download);card.append(actions);
+ const groups=new Map();
+ const parents=new Map();state.assets.forEach(a=>(a.clips||[]).forEach(id=>parents.set(id,a)));
+ state.assets.forEach(asset=>{
+  const parent=parents.get(asset.id);
+  const id=asset.job_id||parent?.id||(asset.kind==='clip'?`legacy-${asset.chat_id}`:asset.id);
+  if(!groups.has(id)){const job=state.jobs.find(j=>j.id===id);groups.set(id,{job,assets:[],title:job?.title||parent?.title||(asset.kind==='clip'?'Earlier ungrouped clips':asset.title)});}
+  groups.get(id).assets.push(asset);
+ });
+ [...groups.entries()].reverse().forEach(([id,group])=>{
+ const section=el('section',undefined,'job-group');section.dataset.jobId=id;
+ section.append(el('h3',group.title),el('p',group.job?`${group.job.status} · ${new Date(group.job.created_at).toLocaleString()} · Job ${id.slice(0,8)}`:'Earlier generation','job-meta'));
+ const outputs=el('div',undefined,'grid'),clips=el('details',undefined,'job-clips'),clipGrid=el('div',undefined,'grid');
+ const clipCount=group.assets.filter(a=>a.kind==='clip').length;
+ clips.append(el('summary',`Individual clips (${clipCount})`),clipGrid);
+ group.assets.filter(a=>a.kind!=='clip').concat(group.assets.filter(a=>a.kind==='clip')).forEach(asset=>{const card=el('article',undefined,'card');card.append(el('span',asset.kind.replaceAll('_',' '),'kind'),el('h3',asset.title),el('p',`${asset.duration.toFixed(1)} seconds · ${(asset.sample_rate/1000).toFixed(0)} kHz · WAV`));const actions=el('div',undefined,'actions');actions.append(button('▶ Play',()=>play(asset)));const download=el('a','Download');download.href=`/api/assets/${asset.id}/audio?download=true`;actions.append(download);card.append(actions);
  if(asset.kind==='voice_preview'){
   if(asset.reusable_models?.length){const details=el('details');details.append(el('summary','Save as a reusable voice'));const form=el('form');const label=el('label','Voice name');const name=el('input');name.placeholder='e.g. Monica';name.required=true;name.maxLength=80;label.append(name);const modelLabel=el('label','Synthesis model');const model=el('select');asset.reusable_models.forEach(m=>{const o=el('option',m);o.value=m;model.append(o);});modelLabel.append(model);const save=el('button','Save voice','primary');save.type='submit';form.append(label,modelLabel,save);form.onsubmit=e=>{e.preventDefault();mutate(()=>action('save',{asset_id:asset.id,name:name.value,model:model.value}));};details.append(form);card.append(details);
   }else card.append(el('p','Preview only. The current service has no compatible voice-reuse model.'));
  }
- target.append(card);});
+ if(asset.clips_deleted)card.append(el('p','Individual clips deleted after assembly.'));
+ (asset.kind==='clip'?clipGrid:outputs).append(card);});
+ section.append(outputs);if(clipCount)section.append(clips);target.append(section);
+ });
 }
 function renderVoices(){const key=JSON.stringify(state.voices);if(key===voicesKey)return;voicesKey=key;const target=$('voices');target.replaceChildren();if(!state.voices.length){target.append(el('div','Save a designed voice from Assets to use it again.', 'empty'));return;}state.voices.forEach(v=>{const card=el('article',undefined,'card');card.append(el('span','SAVED REFERENCE','kind'),el('h3',v.name),el('p',v.description),el('p',v.model));const asset=state.assets.find(a=>a.id===v.asset_id);if(asset)card.append(button('▶ Preview',()=>play(asset)));card.append(button('Use in chat',()=>{switchTab('chat');$('message').value=`Use my saved voice ${v.name} to say: `;$('message').focus();}));target.append(card);});}
 function render(){
@@ -49,7 +69,7 @@ function render(){
  const list=$('chats');list.replaceChildren();state.chats.forEach(c=>list.append(button(c.title,()=>selectChat(c.id),c.id===current?'selected':'')));
  const messages=state.messages.filter(m=>m.chat_id===current),key=JSON.stringify(messages);if(key!==messageKey){messageKey=key;$('messages').replaceChildren();messages.forEach(m=>{const node=el('div',undefined,`message ${m.role}`);if(m.role!=='status')node.append(el('small',m.role==='user'?'YOU':'AUDIO ASSISTANT'));node.append(document.createTextNode(m.content));$('messages').append(node);});}
  $('welcome').hidden=messages.length>0;renderReview(state.chats.find(c=>c.id===current));
- const run=activeRun();$('progress').hidden=!run;$('send').disabled=!!run;$('new-chat').disabled=!!run;$('reset-session').disabled=!!run;
+ const run=activeRun();$('progress').hidden=!run;$('send').disabled=!!run;$('new-chat').disabled=!!run;$('reset-session').disabled=!!run;$('delete-chat').disabled=!!run||!current;$('delete-clips').disabled=!!run;$('delete-clips').checked=state.settings.delete_clips;
  $('review').querySelectorAll('button,textarea').forEach(b=>b.disabled=!!run);
  if(run){$('stage').textContent=run.stage;$('counts').textContent=run.total?`${run.completed} / ${run.total} turns complete`:'';$('cancel').disabled=run.status==='cancelling';}
  $('asset-count').textContent=state.assets.length;$('voice-count').textContent=state.voices.length;renderAssets();renderVoices();
